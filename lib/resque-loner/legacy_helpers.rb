@@ -22,6 +22,11 @@ module Resque
           Resque.redis
         end
 
+        # Old redis server
+        def redis_old_server
+          Resque.redis_old_server
+        end
+
         # Given a Ruby object, returns a string suitable for storage in a
         # queue.
         def encode(object)

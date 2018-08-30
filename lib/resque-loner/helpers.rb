@@ -8,7 +8,8 @@ module Resque
 
         def self.loner_queued?(queue, item)
           return false unless item_is_a_unique_job?(item)
-          redis.get(unique_job_queue_key(queue, item)) == '1'
+          key = unique_job_queue_key(queue, item)
+          redis.get(key) == '1' || redis_old_server.get(key) == '1'
         end
 
         def self.mark_loner_as_queued(queue, item)
@@ -23,10 +24,13 @@ module Resque
         def self.mark_loner_as_unqueued(queue, job)
           item = job.is_a?(Resque::Job) ? job.payload : job
           return unless item_is_a_unique_job?(item)
+          key = unique_job_queue_key(queue, item)
           unless (ttl = loner_lock_after_execution_period(item)) == 0
-            redis.expire(unique_job_queue_key(queue, item), ttl)
+            redis_old_server.expire(key, ttl)
+            redis.expire(key, ttl)
           else
-            redis.del(unique_job_queue_key(queue, item))
+            redis_old_server.del(key)
+            redis.del(key)
           end
         end
 
@@ -64,6 +68,17 @@ module Resque
           klass = klass.to_s
           redis_queue = "queue:#{queue}"
 
+          redis_old_server.lrange(redis_queue, 0, -1).each do |string|
+            json   = decode(string)
+
+            match  = json['class'] == klass
+            match &= json['args'] == args unless args.empty?
+
+            if match
+              Resque::Plugins::Loner::Helpers.mark_loner_as_unqueued(queue, json)
+            end
+          end
+
           redis.lrange(redis_queue, 0, -1).each do |string|
             json   = decode(string)
 
@@ -77,6 +92,8 @@ module Resque
         end
 
         def self.cleanup_loners(queue)
+          keys = redis_old_server.keys("loners:queue:#{queue}:job:*")
+          redis_old_server.del(*keys) unless keys.empty?
           keys = redis.keys("loners:queue:#{queue}:job:*")
           redis.del(*keys) unless keys.empty?
         end
